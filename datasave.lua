@@ -1,80 +1,140 @@
-local DataStoreService = game:GetService("DataStoreService")
-local config = script:WaitForChild("datastore_config")
-local myDataStore = DataStoreService:GetDataStore("$Data$!"..config:FindFirstChild("DataVersion").Value)
+-- ========================================
+-- DATA SAVING FUNCTIONS
+-- ========================================
 
-local saving = config:FindFirstChild("Saving")
-local autoSave = config:FindFirstChild("AutoSave")
 
-local function create_table(plr)
-	local player_stats = {}
 
-	for _, folder in pairs(script:FindFirstChild("Plr"):GetChildren()) do
-		if folder:IsA("Folder") then
-			for _, stat in pairs(plr:FindFirstChild(folder.Name):GetChildren()) do
-				player_stats[stat.Name.." "..folder.Name] = stat.Value
+local function savePlayerYoutuberData(player, data)
+	local df = player:FindFirstChild("DataFolder")
+	if not df then return false end
+
+	local yv = df:FindFirstChild("Youtubers")
+	if not yv then return false end
+
+	local success = pcall(function()
+		yv.Value = HttpService:JSONEncode(data)
+	end)
+
+	return success
+end
+
+local function addYoutuberToData(player, youtuberName, displayNum)
+	if not player or not youtuberName then return false end
+	local data = getPlayerYoutuberData(player)
+	local newEntry = {
+		Name = youtuberName,
+		DisplayNum = displayNum or 1
+	}
+	table.insert(data, newEntry)
+	return savePlayerYoutuberData(player, data)
+end
+
+local function removeYoutuberFromDataByDisplay(player, displayNum)
+	if not player or not displayNum then return false end
+
+	local data = getPlayerYoutuberData(player)
+
+	for i = #data, 1, -1 do
+		if data[i].DisplayNum == displayNum then
+			table.remove(data, i)
+			break 
+		end
+	end
+
+	return savePlayerYoutuberData(player, data)
+end
+
+local function removeYoutuberFromData(player, youtuberName, displayNum)
+	if not player or not youtuberName then return false end
+
+	local data = getPlayerYoutuberData(player)
+
+	for i = #data, 1, -1 do
+		local entry = data[i]
+		if entry.Name == youtuberName then
+			if not displayNum or entry.DisplayNum == displayNum then
+				table.remove(data, i)
+				break 
 			end
 		end
 	end
 
-	return player_stats
+	return savePlayerYoutuberData(player, data)
 end
 
-local function saveData(plr)
+local function updateYoutuberDisplayNum(player, oldDisplayNum, newDisplayNum)
+	if not player or not oldDisplayNum or not newDisplayNum then return false end
 
+	local data = getPlayerYoutuberData(player)
 
-	local player_stats = create_table(plr)
-
-	local success, err = pcall(function()
-		local key = plr.UserId.."'s' Data"
-		myDataStore:SetAsync(key, player_stats)
-	end)
-
-	if success then
-		print("Saved Data Correctly!")
-	else
-		warn(err)
-	end
-end
-
-local function autoSavePlayers()
-	while true do
-		wait(autoSave.Value * 60) 
-		for _, player in ipairs(game.Players:GetPlayers()) do
-			saveData(player)
+	for i, entry in ipairs(data) do
+		if entry.DisplayNum == oldDisplayNum then
+			entry.DisplayNum = newDisplayNum
+			break
 		end
 	end
+
+	return savePlayerYoutuberData(player, data)
 end
 
+local function clearPlayerYoutuberData(player)
+	if not player then return false end
+	return savePlayerYoutuberData(player, {})
+end
 
-coroutine.wrap(autoSavePlayers)()
+local function debugPrintPlayerData(player)
+	local data = getPlayerYoutuberData(player)
+	print("=== " .. player.Name .. "'s YouTuber Data ===")
+	for i, entry in ipairs(data) do
+		print(i .. ": " .. entry.Name .. " (Display " .. entry.DisplayNum .. ")")
+	end
+	print("=== End Data ===")
+end
 
-game.Players.PlayerAdded:Connect(function(plr)
-	local key = plr.UserId.."'s' Data"
-	local data = myDataStore:GetAsync(key)
+-- ========================================
+-- GLOBAL FUNCTIONS
+-- ========================================
+_G.CancelSteal = function(stealingPlayer)
+	if not stealingPlayer or not stolenYoutubers[stealingPlayer] then
+		return false
+	end
 
-	for _, folder in pairs(script:FindFirstChild("Plr"):GetChildren()) do
-		if folder:IsA("Folder") then
-			local fc = folder:Clone()
-			fc.Parent = plr
+	local stolenData = stolenYoutubers[stealingPlayer]
+	local originalOwner = stolenData.originalOwner
+	local youtuberName = stolenData.youtuberName
+	local clone = stolenData.clone
+	local originalDisplayNum = stolenData.originalDisplayNum
+	local carryingAnimation = stolenData.carryingAnimation
 
-			if saving.Value == true then
-				for _, item in pairs(fc:GetChildren()) do
-					if data then
-						if data[item.Name.." "..folder.Name] then
-							item.Value = data[item.Name.." "..folder.Name]
-							
-						end	
-					else
-						warn("no data!")
-					end
+	if carryingAnimation then
+		pcall(function()
+			if carryingAnimation.IsPlaying then
+				carryingAnimation:Stop()
+			end
+		end)
+	end
+
+	stolenYoutubers[stealingPlayer] = nil
+	if clone and clone.Parent then
+		clone:Destroy()
+	end
+
+	if originalOwner and originalOwner.Parent then
+		addYoutuberToData(originalOwner, youtuberName, originalDisplayNum)
+
+		local base = getPlayerBase(originalOwner)
+		if base then
+			local displays = base:FindFirstChild("Displays")
+			if displays then
+				local targetDisplay = displays:FindFirstChild("Display" .. originalDisplayNum)
+				if targetDisplay and not targetDisplay:GetAttribute("Occupied") then
+					assignToDisplay(originalOwner, youtuberName, targetDisplay, true)
+				else
+					assignToDisplay(originalOwner, youtuberName, nil, true)
 				end
 			end
 		end
 	end
-end)
 
-game.Players.PlayerRemoving:Connect(function(plr)
-	if saving.Value == true then
-		saveData(plr)
-	end
-end)
+	return true
+end
